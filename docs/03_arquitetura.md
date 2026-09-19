@@ -230,6 +230,20 @@ A fonte do IPP/PCRJ foi utilizada para estabelecer a relação:
 
 **Bairro do acidente → Região Administrativa**
 
+IPP/PCRJ
+   |
+   v
+Referência oficial Bairro × Região Administrativa
+   |
+   v
+Normalização determinística dos nomes
+   |
+   v
+Correspondência exata com bairro do RENAEST
+   |
+   v
+dim_regiao + id_regiao na fato_acidentes
+
 Antes da associação, os textos foram submetidos a normalização determinística para reduzir diferenças puramente de representação.
 
 Foram consideradas operações como:
@@ -325,3 +339,207 @@ Durante o desenvolvimento, nem todo dado disponível foi automaticamente utiliza
 Campos cuja semântica não correspondia ao conceito necessário, coordenadas que não forneciam informação geográfica utilizável e correspondências territoriais aproximadas consideradas inseguras foram excluídos dessas respectivas finalidades analíticas.
 
 Essa abordagem evita aumentar artificialmente a cobertura do conjunto à custa da confiabilidade da informação produzida.
+
+---
+## 14. Fluxo arquitetural completo
+
+A arquitetura implementada pode ser resumida da seguinte forma:
+
+                RENAEST / SENATRAN
+                        |
+                        v
+               Arquivos CSV oficiais
+                        |
+                        v
+                 LANDING ZONE
+          /Volumes/workspace/bronze/landing
+                        |
+                        v
+                     BRONZE
+              Tabelas Delta próximas
+                  aos dados de origem
+                        |
+                        v
+                     SILVER
+          Limpeza | Tipagem | Padronização
+            Validação | Recorte municipal
+                        |
+                        v
+                      GOLD
+               Modelo dimensional
+                        |
+             +----------+----------+
+             |                     |
+             v                     v
+        QUALIDADE              ANALYTICS
+      Testes e controles    Perguntas de negócio
+      
+## 15. Enriquecimento territorial
+
+IPP/PCRJ
+   |
+   v
+Bairros e Regiões Administrativas
+   |
+   v
+Normalização + correspondência exata
+   |
+   v
+GOLD
+
+---
+## 16. Persistência
+
+As camadas Bronze, Silver e Gold são persistidas utilizando tabelas Delta.
+
+Essa escolha permite trabalhar com estruturas tabulares persistentes dentro do Lakehouse e separa os dados processados dos arquivos CSV originais mantidos na Landing Zone.
+
+A organização física e lógica utilizada é:
+
+Landing
+└── arquivos CSV originais
+
+workspace.bronze
+├── acidentes
+├── localidade
+├── tipo_veiculo
+└── vitimas
+
+workspace.silver
+├── acidentes
+├── localidade
+├── tipo_veiculo
+└── vitimas
+
+workspace.gold
+├── fato_acidentes
+├── dim_tempo
+├── dim_horario
+├── dim_bairro
+└── dim_regiao
+
+## 17. Qualidade e observabilidade do pipeline
+A qualidade foi implementada como uma etapa explícita após a construção das camadas.
+
+O notebook 05_quality verifica, entre outros aspectos:
+
+completude;
+unicidade;
+validade temporal;
+validade quantitativa;
+consistência entre medidas;
+integridade referencial;
+consistência territorial;
+reconciliação entre camadas.
+
+Um dos principais controles de pipeline é a reconciliação:
+Bronze Rio      55.046
+      ↓
+Silver          55.046
+      ↓
+Gold            55.046
+
+Esse controle permite verificar se as transformações produziram perda ou multiplicação de acidentes.
+
+No resultado final:
+
+diferença Bronze → Silver = 0;
+diferença Silver → Gold = 0;
+chaves estrangeiras órfãs na Gold = 0.
+
+## 18. Consumo analítico
+
+As análises são executadas sobre a camada Gold, evitando utilizar diretamente os arquivos brutos para responder às perguntas de negócio.
+
+Esse princípio mantém a separação entre processamento e consumo:
+
+Fonte
+  ↓
+Landing
+  ↓
+Bronze
+  ↓
+Silver
+  ↓
+Gold
+  ↓
+Analytics
+
+O notebook 06_analytics utiliza o modelo dimensional para investigar padrões por:
+
+bairro;
+mês;
+dia da semana;
+horário;
+Região Administrativa;
+ano.
+
+## 19. Organização dos notebooks
+
+A implementação funcional está distribuída nos seguintes notebooks:
+
+| Notebook          | Responsabilidade                        |
+| ----------------- | --------------------------------------- |
+| `01_ingestao_api` | Ingestão dos CSVs e persistência Bronze |
+| `03_silver`       | Tratamento e construção da Silver       |
+| `04_gold`         | Construção do modelo dimensional Gold   |
+| `05_quality`      | Testes de qualidade                     |
+| `06_analytics`    | Análises e perguntas de negócio         |
+
+O nome 01_ingestao_api foi definido durante o planejamento inicial, quando uma API era considerada como possível mecanismo de aquisição.
+
+Após a investigação da fonte, optou-se pelos arquivos CSV disponibilizados oficialmente. O nome foi preservado para evitar alteração desnecessária da estrutura já implementada.
+
+## 20. Versionamento
+
+O código e a documentação do projeto são mantidos em um repositório público no GitHub.
+
+O repositório contém:
+
+documentação;
+catálogo de dados;
+notebooks/código do pipeline;
+consultas analíticas;
+diagramas;
+evidências visuais do ambiente e dos resultados.
+
+A integração do ambiente Databricks com o repositório faz parte da organização de versionamento e rastreabilidade do projeto, sem alterar a arquitetura de dados descrita neste documento.
+
+## 21. Princípios adotados
+
+A arquitetura foi construída segundo alguns princípios:
+
+Separação de responsabilidades: cada camada possui uma finalidade definida.
+
+Preservação da origem: os arquivos recebidos permanecem disponíveis na Landing Zone.
+
+Transformação progressiva: limpeza e padronização são realizadas após a ingestão.
+
+Rastreabilidade: metadados técnicos e documentação permitem acompanhar a origem e as transformações.
+
+Integridade: o modelo Gold foi validado quanto às suas chaves e granularidade.
+
+Conservadorismo na integração: informações externas somente são associadas quando existe uma regra considerada segura.
+
+Consumo sobre dados preparados: as análises utilizam a Gold, e não diretamente os dados brutos.
+
+## 22. Resultado arquitetural
+
+A arquitetura final implementada é:
+
+Fonte → Landing → Bronze → Silver → Gold → Qualidade/Analytics
+
+Ela mantém os dados de origem separados dos dados tratados e dos dados destinados ao consumo analítico, ao mesmo tempo em que preserva uma cadeia rastreável entre as etapas do projeto.
+
+
+Há duas decisões deliberadas aqui.
+
+Primeiro, **não coloquei um `02_bronze` fictício na tabela de notebooks**. A documentação representa o que efetivamente executamos no Databricks: a Bronze está no `01_ingestao_api`.
+
+Segundo, na seção de GitHub usei “a integração [...] faz parte da organização de versionamento” sem afirmar que ela já está concluída. Quando terminarmos `04_modelagem.md`, vamos tratar essa pendência de forma controlada e verificar o recurso atual do Databricks antes de conectar qualquer coisa.
+
+Commit:
+
+`docs: documenta arquitetura lakehouse e camadas medallion`
+
+Depois de salvar, falta somente o **`docs/04_modelagem.md`** nessa sequência inicial. Aí fechamos `01–09` e partimos para a integração Databricks ↔ GitHub que você mencionou.
