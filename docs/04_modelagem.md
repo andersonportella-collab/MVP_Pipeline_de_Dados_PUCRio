@@ -22,7 +22,7 @@ A modelagem foi construída a partir dos dados tratados na camada Silver e do en
 
 O modelo Gold pode ser representado da seguinte forma:
 
-```text
+
                          dim_tempo
                              |
                              |
