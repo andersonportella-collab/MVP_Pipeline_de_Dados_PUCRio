@@ -1,401 +1,287 @@
-# 02 — Fontes de Dados
+# 03 — Arquitetura do Pipeline
 
-## 1. Estratégia de seleção das fontes
+## 1. Visão geral
 
-A seleção das fontes de dados priorizou três critérios:
+O projeto foi estruturado segundo uma arquitetura **Lakehouse**, utilizando o padrão **Medallion Architecture** para separar as diferentes responsabilidades do processamento de dados.
 
-1. origem oficial;
-2. possibilidade de rastrear a procedência dos dados;
-3. adequação ao problema de análise de acidentes de trânsito no município do Rio de Janeiro.
+A implementação foi realizada no **Databricks Free Edition**, utilizando Apache Spark, PySpark, Spark SQL, Delta Lake e Unity Catalog.
 
-Durante o desenvolvimento foram investigadas fontes públicas relacionadas ao município e à administração territorial do Rio de Janeiro.
+A arquitetura organiza o fluxo desde a preservação dos arquivos de origem até a disponibilização dos dados preparados para análise.
 
-A fonte principal selecionada para os acidentes foi o Registro Nacional de Sinistros e Estatísticas de Trânsito — RENAEST, disponibilizado pela Secretaria Nacional de Trânsito — SENATRAN.
+O fluxo principal implementado é:
 
-Posteriormente, foi necessária uma segunda fonte oficial para permitir o enriquecimento dos acidentes com as Regiões Administrativas do município. Para essa finalidade foi utilizada uma referência cartográfica oficial do Instituto Pereira Passos / Prefeitura da Cidade do Rio de Janeiro.
+```text
+RENAEST / SENATRAN
+        |
+        v
+Arquivos CSV oficiais
+        |
+        v
+   LANDING ZONE
+        |
+        v
+      BRONZE
+        |
+        v
+      SILVER
+        |
+        v
+       GOLD
+      /    \
+     v      v
+QUALIDADE  ANALYTICS
+```
 
----
-
-## 2. Fonte principal — RENAEST/SENATRAN
-
-### Identificação
-
-**Fonte:** Registro Nacional de Sinistros e Estatísticas de Trânsito — RENAEST  
-**Órgão:** Secretaria Nacional de Trânsito — SENATRAN  
-**Tipo:** dados públicos oficiais  
-**Formato utilizado:** CSV  
-**Conjunto utilizado:** `renaest_dabertos_20250512`
-
-Página do conjunto de dados:
-
-https://dados.transportes.gov.br/dataset/renaest
-
-Página institucional do RENAEST:
-
-https://www.gov.br/transportes/pt-br/assuntos/transito/conteudo-Senatran/registro-nacional-de-sinistros-e-estatisticas-de-transito
-
----
-
-## 3. Arquivos utilizados
-
-O conjunto disponibilizado pelo RENAEST contém diferentes arquivos relacionados aos acidentes.
-
-Neste projeto foram ingeridos quatro arquivos:
-
-### Acidentes
-
-`Acidentes_DadosAbertos_20250512.csv`
-
-Arquivo principal para o escopo analítico do MVP.
-
-Na versão utilizada, possui aproximadamente 7,2 milhões de registros e 35 campos antes da aplicação do recorte municipal.
-
-Entre os atributos disponíveis estão:
-
-- identificador do acidente;
-- data;
-- horário;
-- bairro;
-- código IBGE;
-- condição meteorológica;
-- condição da pista;
-- fase do dia;
-- tipo de acidente;
-- tipo de pista;
-- tipo de pavimento;
-- tipo de rodovia;
-- quantidade de envolvidos;
-- quantidade de feridos/ilesos;
-- quantidade de óbitos.
-
-### Localidade
-
-`Localidade_DadosAbertos_20250512.csv`
-
-Contém informações relacionadas às localidades presentes no RENAEST, incluindo atributos como:
-
-- código IBGE;
-- município;
-- unidade federativa;
-- região;
-- população;
-- frota.
-
-O arquivo foi ingerido e tratado no pipeline, embora a tabela de acidentes seja a principal fonte do modelo analítico desenvolvido neste MVP.
-
-### Tipo de Veículo
-
-`TipoVeiculo_DadosAbertos_20250512.csv`
-
-Contém informações relacionadas aos tipos e quantidades de veículos associados aos acidentes.
-
-Entre os campos estão:
-
-- `num_acidente`;
-- `tipo_veiculo`;
-- `qtde_veiculos`;
-- indicador de veículo estrangeiro.
-
-O arquivo foi incorporado às camadas Bronze e Silver, permanecendo disponível para possíveis extensões analíticas.
-
-### Vítimas
-
-`Vitimas_DadosAbertos_20250512.csv`
-
-Contém informações relacionadas às pessoas envolvidas nos acidentes, incluindo atributos como:
-
-- gênero;
-- faixa etária;
-- gravidade da lesão;
-- tipo de envolvido;
-- uso de equipamento de segurança;
-- indicação de motorista;
-- suspeita de álcool.
-
-O arquivo também foi incorporado às camadas Bronze e Silver e pode sustentar análises futuras que não fazem parte do escopo principal da camada Gold deste MVP.
+Além da fonte principal RENAEST/SENATRAN, o pipeline utiliza uma referência territorial oficial do **Instituto Pereira Passos / Prefeitura da Cidade do Rio de Janeiro (IPP/PCRJ)** para enriquecer os dados com informações de Região Administrativa.
 
 ---
 
-## 4. Recorte geográfico
+## 2. Princípios arquiteturais
 
-A base nacional do RENAEST contém registros de diferentes localidades.
+A arquitetura foi construída segundo os seguintes princípios:
 
-Para o escopo principal do projeto foi selecionado o município do Rio de Janeiro por meio do código IBGE:
+### Separação de responsabilidades
 
-`3304557`
+Cada camada possui uma finalidade específica dentro do pipeline.
 
-Após esse recorte, a tabela Silver de acidentes contém:
+### Preservação da origem
+
+Os arquivos recebidos da fonte oficial são preservados na Landing Zone antes das transformações realizadas nas demais camadas.
+
+### Transformação progressiva
+
+Os dados evoluem progressivamente de estruturas próximas à origem para estruturas tratadas e, posteriormente, para um modelo dimensional voltado ao consumo analítico.
+
+### Persistência
+
+As camadas Bronze, Silver e Gold utilizam tabelas Delta persistidas no ambiente Databricks.
+
+### Rastreabilidade
+
+A separação entre as etapas permite acompanhar o fluxo desde os arquivos de origem até as informações utilizadas nas análises.
+
+### Integridade
+
+O modelo Gold é submetido a verificações de granularidade, unicidade e integridade referencial.
+
+### Conservadorismo na integração
+
+Informações territoriais externas somente são associadas quando existe uma regra de correspondência considerada segura.
+
+### Consumo sobre dados preparados
+
+As análises são realizadas sobre a camada Gold, evitando utilizar diretamente os dados brutos como fonte das respostas analíticas.
+
+---
+
+## 3. Landing Zone
+
+A Landing Zone representa o primeiro ponto de armazenamento dos arquivos utilizados pelo pipeline.
+
+Os arquivos CSV oficiais do RENAEST/SENATRAN são preservados antes da transformação para tabelas Delta.
+
+No ambiente implementado, foi utilizado o volume:
+
+```text
+workspace.bronze.landing
+```
+
+A Landing Zone permite manter os arquivos de origem separados das estruturas posteriormente processadas.
+
+De forma simplificada:
+
+```text
+RENAEST / SENATRAN
+        |
+        v
+Arquivos CSV oficiais
+        |
+        v
+workspace.bronze.landing
+```
+
+A preservação dessa etapa contribui para a rastreabilidade entre os dados recebidos e as tabelas construídas pelo pipeline.
+
+---
+
+## 4. Camada Bronze
+
+A camada Bronze representa a primeira persistência estruturada dos dados ingeridos.
+
+Seu objetivo é manter os dados próximos à estrutura da fonte, convertendo os arquivos utilizados na ingestão para tabelas Delta.
+
+A organização implementada é:
+
+```text
+workspace.bronze
+├── acidentes
+├── localidade
+├── tipo_veiculo
+└── vitimas
+```
+
+Nessa etapa, a prioridade é preservar os registros recebidos e estabelecer uma base persistente para as transformações posteriores.
+
+A camada Bronze não representa ainda o modelo preparado para consumo analítico.
+
+---
+
+## 5. Camada Silver
+
+A camada Silver concentra as principais operações de tratamento e preparação dos dados.
+
+Entre as operações realizadas estão:
+
+- limpeza;
+- tipagem;
+- padronização;
+- validação de atributos;
+- tratamento de campos textuais;
+- preparação de datas e horários;
+- validação de medidas quantitativas;
+- recorte geográfico;
+- preparação dos dados para a modelagem dimensional.
+
+A organização principal é:
+
+```text
+workspace.silver
+├── acidentes
+├── localidade
+├── tipo_veiculo
+└── vitimas
+```
+
+Para o escopo analítico do MVP, a tabela de acidentes constitui a principal entrada para a construção da camada Gold.
+
+O recorte do município do Rio de Janeiro é realizado utilizando o código IBGE:
+
+```text
+3304557
+```
+
+Após o tratamento e o recorte municipal, a tabela Silver de acidentes contém:
 
 **55.046 registros.**
 
-O recorte por código IBGE foi preferido à comparação textual do nome do município, pois utiliza um identificador estruturado da localidade.
+---
+
+## 6. Camada Gold
+
+A camada Gold disponibiliza os dados em uma estrutura orientada ao consumo analítico.
+
+Foi adotado um **modelo dimensional em esquema estrela**, composto por uma tabela fato central e quatro dimensões.
+
+A organização implementada é:
+
+```text
+workspace.gold
+├── fato_acidentes
+├── dim_tempo
+├── dim_horario
+├── dim_bairro
+└── dim_regiao
+```
+
+O modelo pode ser representado de forma simplificada como:
+
+```text
+                       dim_tempo
+                           |
+                           |
+dim_bairro -------- fato_acidentes -------- dim_horario
+                           |
+                           |
+                       dim_regiao
+```
+
+A granularidade da tabela `fato_acidentes` é de **um registro por acidente**.
+
+As tabelas persistidas possuem as seguintes quantidades de registros:
+
+| Tabela | Registros |
+|---|---:|
+| `fato_acidentes` | 55.046 |
+| `dim_tempo` | 2.434 |
+| `dim_horario` | 1.319 |
+| `dim_bairro` | 311 |
+| `dim_regiao` | 34 |
+
+A modelagem detalhada é apresentada em:
+
+`docs/04_modelagem.md`
 
 ---
 
-## 5. Período encontrado
+## 7. Enriquecimento territorial
 
-Após o tratamento e a validação das datas, os acidentes utilizados no projeto apresentam o seguinte intervalo:
+O RENAEST fornece informação de bairro para parte dos acidentes, mas o campo `regiao` existente na fonte não representa as Regiões Administrativas do município do Rio de Janeiro.
 
-**Data mínima:** `2018-01-01`  
-**Data máxima:** `2024-11-30`
+Por esse motivo, o pipeline utiliza uma referência territorial oficial do **Instituto Pereira Passos / Prefeitura da Cidade do Rio de Janeiro (IPP/PCRJ)**.
 
-A existência desse intervalo não significa que todos os meses estejam presentes em todos os anos.
+O fluxo de enriquecimento territorial é:
 
-A análise de cobertura identificou que:
-
-- 2018 a 2022 possuem 12 meses;
-- 2023 possui 10 meses;
-- 2024 possui 10 meses.
-
-Essa limitação é considerada nas análises temporais.
-
----
-
-## 6. Limitações identificadas na fonte principal
-
-A avaliação dos dados identificou limitações que afetam diretamente algumas análises.
-
-### 6.1 Informação de bairro
-
-O atributo bairro possui baixa completude quando todo o período é considerado.
-
-Dos 55.046 acidentes:
-
-- 28.152 possuem bairro identificado;
-- 26.894 não possuem bairro;
-- a completude global é de 51,14%.
-
-A cobertura também varia significativamente entre os anos, sendo praticamente inexistente entre 2018 e 2020.
-
-Essa característica limita análises territoriais realizadas sobre toda a série histórica.
-
-### 6.2 Campo `regiao`
-
-Durante a investigação dos dados foi verificado que o campo `regiao` existente na fonte RENAEST não representa as Regiões Administrativas do município do Rio de Janeiro.
-
-Portanto, esse campo não foi utilizado para responder à pergunta relacionada às Regiões Administrativas.
-
-Uma fonte territorial oficial complementar foi utilizada para essa finalidade.
-
-### 6.3 Coordenadas geográficas
-
-Durante a inspeção dos dados foram encontrados registros com valores de latitude e longitude sem utilidade para o georreferenciamento necessário ao projeto.
-
-Por esse motivo, as coordenadas não foram utilizadas para determinar a Região Administrativa dos acidentes.
-
-A estratégia territorial adotada foi baseada no bairro informado e em uma referência oficial de bairros e Regiões Administrativas.
-
-### 6.4 Cobertura temporal
-
-Foram identificados meses ausentes em 2023 e 2024.
-
-Essa característica impede tratar os totais desses dois anos como diretamente equivalentes aos totais dos anos completos sem considerar a diferença de cobertura.
-
----
-
-## 7. Fonte complementar — IPP/PCRJ
-
-Para responder à pergunta sobre Regiões Administrativas foi necessário complementar o RENAEST com uma referência territorial oficial.
-
-### Identificação
-
-**Fonte:** Limites Administrativos  
-**Órgão:** Instituto Pereira Passos / Prefeitura da Cidade do Rio de Janeiro  
-**Tipo:** serviço cartográfico oficial  
-**Tecnologia:** ArcGIS Feature Service
-
-Camada utilizada:
-
-https://pgeo3.rio.rj.gov.br/arcgis/rest/services/Cartografia/Limites_administrativos/FeatureServer/4
-
-A camada consultada fornece atributos relacionados aos bairros e à organização administrativa do município.
-
-Entre os campos utilizados no projeto estão:
-
-- `nome`;
-- `codbairro`;
-- `regiao_adm`;
-- `codra`;
-- `area_plane`.
-
-Foram obtidos 167 registros de bairros na referência consultada.
-
----
-
-## 8. Motivo do enriquecimento territorial
-
-A fonte principal permite identificar o bairro em parte dos acidentes, mas não fornece diretamente a Região Administrativa municipal necessária à pergunta de negócio.
-
-A fonte do IPP/PCRJ foi utilizada para estabelecer a relação:
-
-**Bairro do acidente → Região Administrativa**
-
+```text
 IPP/PCRJ
    |
    v
-Referência oficial Bairro × Região Administrativa
+Referência oficial
+Bairro × Região Administrativa
    |
    v
-Normalização determinística dos nomes
+Normalização determinística
+dos nomes dos bairros
    |
    v
-Correspondência exata com bairro do RENAEST
+Correspondência exata
+com o bairro do RENAEST
    |
    v
-dim_regiao + id_regiao na fato_acidentes
+dim_regiao
+   |
+   v
+id_regiao na fato_acidentes
+```
 
-Antes da associação, os textos foram submetidos a normalização determinística para reduzir diferenças puramente de representação.
+Antes da associação, os nomes são submetidos a operações determinísticas de normalização, incluindo tratamento de espaços, caixa e acentuação para comparação.
 
-Foram consideradas operações como:
+A associação definitiva utiliza somente correspondências exatas após essa normalização.
 
-- remoção de espaços excedentes;
-- conversão para caixa alta;
-- normalização de acentuação para comparação.
+Técnicas de similaridade textual foram utilizadas apenas como instrumento de diagnóstico durante o desenvolvimento e não como mecanismo automático de classificação.
 
-A associação definitiva utilizou somente correspondências exatas após essa normalização.
+Os registros sem associação territorial segura permanecem identificados como não informados, evitando a atribuição de uma Região Administrativa sem evidência suficiente.
 
 ---
 
-## 9. Tratamento de correspondências territoriais
+## 8. Cobertura do enriquecimento territorial
 
-A investigação mostrou que alguns bairros do RENAEST não apresentavam correspondência exata com a referência oficial.
+A qualidade da informação territorial da fonte impõe uma limitação importante à arquitetura analítica.
 
-Foram avaliadas técnicas de similaridade textual como diagnóstico.
-
-Embora algumas sugestões fossem plausíveis, também foram observadas associações potencialmente incorretas.
-
-Por esse motivo, similaridade textual não foi utilizada como mecanismo automático para determinar a Região Administrativa.
-
-O resultado final foi:
+Dos **55.046 acidentes**:
 
 | Situação | Acidentes | Percentual |
 |---|---:|---:|
 | Associados à referência oficial | 27.075 | 49,19% |
 | Sem bairro informado | 26.894 | 48,86% |
-| Bairro informado, sem associação exata | 1.077 | 1,96% |
+| Bairro informado sem associação exata | 1.077 | 1,96% |
 
-Os registros sem associação segura foram mantidos como não informados na dimensão territorial, em vez de receberem uma classificação inferida.
+A baixa cobertura territorial não representa uma falha de integridade referencial do modelo Gold.
 
----
+Os registros sem correspondência segura são associados às chaves especiais previstas nas dimensões, preservando a integridade do modelo sem criar classificações territoriais inferidas.
 
-## 10. Forma de aquisição dos dados
+A análise detalhada dessas limitações está documentada em:
 
-Os dados do RENAEST foram obtidos por meio dos arquivos públicos disponibilizados pela fonte oficial.
-
-Embora uma API tenha sido considerada inicialmente no planejamento do projeto, não houve necessidade de criar ou forçar esse mecanismo de ingestão.
-
-Como os dados necessários estavam oficialmente disponíveis em arquivos CSV, esses arquivos foram utilizados diretamente.
-
-Os arquivos originais foram carregados na Landing Zone do Databricks e posteriormente persistidos na camada Bronze em formato Delta.
-
-Essa decisão mantém o processo de ingestão simples e rastreável em relação aos arquivos publicados pela fonte.
+`docs/07_qualidade_dados.md`
 
 ---
 
-## 11. Arquivos auxiliares
-
-Também foi utilizado o dicionário de dados disponibilizado junto ao conjunto RENAEST como material de apoio para compreensão dos campos da fonte.
-
-O catálogo produzido especificamente para este projeto está disponível em:
-
-`catalog/data_dictionary.xlsx`
-
-Esse catálogo documenta o modelo Gold implementado, seus campos, tipos físicos, relacionamentos, regras e resultados de qualidade.
-
----
-
-## 12. Papel das fontes no pipeline
-
-A utilização das fontes pode ser resumida da seguinte forma:
-
-| Fonte | Papel |
-|---|---|
-| RENAEST/SENATRAN | Fonte principal dos acidentes e atributos relacionados |
-| IPP/PCRJ | Enriquecimento oficial Bairro → Região Administrativa |
-
-A linhagem principal do projeto é:
-
-RENAEST/SENATRAN  
-→ Landing  
-→ Bronze  
-→ Silver  
-→ Gold
-
-Para o enriquecimento territorial:
-
-IPP/PCRJ  
-→ normalização da referência territorial  
-→ associação por bairro  
-→ `dim_regiao` e `fato_acidentes`
-
----
-
-## 13. Considerações metodológicas
-
-A escolha das fontes e das regras de integração procurou privilegiar procedência, rastreabilidade e significado semântico.
-
-Durante o desenvolvimento, nem todo dado disponível foi automaticamente utilizado.
-
-Campos cuja semântica não correspondia ao conceito necessário, coordenadas que não forneciam informação geográfica utilizável e correspondências territoriais aproximadas consideradas inseguras foram excluídos dessas respectivas finalidades analíticas.
-
-Essa abordagem evita aumentar artificialmente a cobertura do conjunto à custa da confiabilidade da informação produzida.
-
----
-## 14. Fluxo arquitetural completo
-
-A arquitetura implementada pode ser resumida da seguinte forma:
-
-                RENAEST / SENATRAN
-                        |
-                        v
-               Arquivos CSV oficiais
-                        |
-                        v
-                 LANDING ZONE
-          /Volumes/workspace/bronze/landing
-                        |
-                        v
-                     BRONZE
-              Tabelas Delta próximas
-                  aos dados de origem
-                        |
-                        v
-                     SILVER
-          Limpeza | Tipagem | Padronização
-            Validação | Recorte municipal
-                        |
-                        v
-                      GOLD
-               Modelo dimensional
-                        |
-             +----------+----------+
-             |                     |
-             v                     v
-        QUALIDADE              ANALYTICS
-      Testes e controles    Perguntas de negócio
-      
-## 15. Enriquecimento territorial
-
-IPP/PCRJ
-   |
-   v
-Bairros e Regiões Administrativas
-   |
-   v
-Normalização + correspondência exata
-   |
-   v
-GOLD
-
----
-## 16. Persistência
+## 9. Persistência
 
 As camadas Bronze, Silver e Gold são persistidas utilizando tabelas Delta.
 
-Essa escolha permite trabalhar com estruturas tabulares persistentes dentro do Lakehouse e separa os dados processados dos arquivos CSV originais mantidos na Landing Zone.
+A organização física e lógica principal pode ser resumida da seguinte forma:
 
-A organização física e lógica utilizada é:
-
+```text
 Landing
 └── arquivos CSV originais
 
@@ -417,129 +303,319 @@ workspace.gold
 ├── dim_horario
 ├── dim_bairro
 └── dim_regiao
+```
 
-## 17. Qualidade e observabilidade do pipeline
-A qualidade foi implementada como uma etapa explícita após a construção das camadas.
+Essa separação mantém os arquivos recebidos distintos das tabelas processadas e das estruturas destinadas ao consumo analítico.
 
-O notebook 05_quality verifica, entre outros aspectos:
+---
 
-completude;
-unicidade;
-validade temporal;
-validade quantitativa;
-consistência entre medidas;
-integridade referencial;
-consistência territorial;
-reconciliação entre camadas.
+## 10. Qualidade como etapa do pipeline
 
-Um dos principais controles de pipeline é a reconciliação:
-Bronze Rio      55.046
-      ↓
-Silver          55.046
-      ↓
-Gold            55.046
+A qualidade dos dados é tratada como uma etapa explícita da arquitetura.
 
-Esse controle permite verificar se as transformações produziram perda ou multiplicação de acidentes.
+Após a construção das camadas, o pipeline executa verificações relacionadas a:
 
-No resultado final:
+- completude;
+- unicidade;
+- validade temporal;
+- validade das medidas quantitativas;
+- consistência entre atributos;
+- integridade referencial;
+- consistência territorial;
+- reconciliação entre camadas.
 
-diferença Bronze → Silver = 0;
-diferença Silver → Gold = 0;
-chaves estrangeiras órfãs na Gold = 0.
+A etapa é implementada principalmente no notebook:
 
-## 18. Consumo analítico
+`05_quality.ipynb`
 
-As análises são executadas sobre a camada Gold, evitando utilizar diretamente os arquivos brutos para responder às perguntas de negócio.
+A arquitetura pode, portanto, ser representada como:
 
-Esse princípio mantém a separação entre processamento e consumo:
-
+```text
 Fonte
-  ↓
+  |
+  v
 Landing
-  ↓
+  |
+  v
 Bronze
-  ↓
+  |
+  v
 Silver
-  ↓
+  |
+  v
 Gold
-  ↓
+  |
+  v
+Qualidade
+```
+
+Os controles de qualidade não substituem as transformações das camadas anteriores. Sua função é verificar os resultados produzidos e identificar limitações relevantes para o consumo dos dados.
+
+---
+
+## 11. Reconciliação entre camadas
+
+Um dos principais controles utilizados para verificar a preservação da granularidade dos acidentes é a reconciliação entre Bronze, Silver e Gold.
+
+O resultado obtido para o conjunto do município do Rio de Janeiro foi:
+
+```text
+Bronze Rio: 55.046
+      |
+      v
+Silver:     55.046
+      |
+      v
+Gold:       55.046
+```
+
+As diferenças encontradas foram:
+
+```text
+Bronze → Silver = 0
+Silver → Gold   = 0
+```
+
+Na tabela `fato_acidentes` também foram validados:
+
+- **0 duplicidades de `num_acidente`**;
+- **0 chaves estrangeiras nulas**;
+- **0 chaves estrangeiras órfãs**.
+
+Esses controles fornecem evidência de que as principais transformações preservaram a granularidade dos acidentes e a integridade referencial do modelo dimensional.
+
+---
+
+## 12. Consumo analítico
+
+As análises são executadas sobre a camada Gold.
+
+O fluxo de consumo é:
+
+```text
+Fonte
+  |
+  v
+Landing
+  |
+  v
+Bronze
+  |
+  v
+Silver
+  |
+  v
+Gold
+  |
+  v
 Analytics
+```
 
-O notebook 06_analytics utiliza o modelo dimensional para investigar padrões por:
+O notebook:
 
-bairro;
-mês;
-dia da semana;
-horário;
-Região Administrativa;
-ano.
+`06_analytics.ipynb`
 
-## 19. Organização dos notebooks
+utiliza o modelo dimensional para responder às perguntas de negócio relacionadas a:
 
-A implementação funcional está distribuída nos seguintes notebooks:
+- bairro;
+- mês;
+- dia da semana;
+- horário;
+- Região Administrativa;
+- ano;
+- qualidade e limitações dos dados.
 
-| Notebook          | Responsabilidade                        |
-| ----------------- | --------------------------------------- |
-| `01_ingestao_api` | Ingestão dos CSVs e persistência Bronze |
-| `03_silver`       | Tratamento e construção da Silver       |
-| `04_gold`         | Construção do modelo dimensional Gold   |
-| `05_quality`      | Testes de qualidade                     |
-| `06_analytics`    | Análises e perguntas de negócio         |
+Essa separação evita que as respostas analíticas dependam diretamente dos arquivos brutos de origem.
 
-O nome 01_ingestao_api foi definido durante o planejamento inicial, quando uma API era considerada como possível mecanismo de aquisição.
+---
 
-Após a investigação da fonte, optou-se pelos arquivos CSV disponibilizados oficialmente. O nome foi preservado para evitar alteração desnecessária da estrutura já implementada.
+## 13. Fluxo arquitetural completo
 
-## 20. Versionamento
+Considerando as etapas de processamento, enriquecimento, qualidade e consumo, a arquitetura final pode ser representada como:
 
-O código e a documentação do projeto são mantidos em um repositório público no GitHub.
+```text
+                    RENAEST / SENATRAN
+                            |
+                            v
+                   Arquivos CSV oficiais
+                            |
+                            v
+                       LANDING ZONE
+                            |
+                            v
+                          BRONZE
+                            |
+                            v
+                          SILVER
+                            |
+                            v
+                           GOLD
+                            ^
+                            |
+              +-------------+-------------+
+              |                           |
+              |                        IPP/PCRJ
+              |                           |
+              |                    Referência oficial
+              |                   Bairro × Região Adm.
+              |                           |
+              |                    Normalização +
+              |                  correspondência exata
+              |                           |
+              +---------------------------+
+                            |
+                 +----------+----------+
+                 |                     |
+                 v                     v
+             QUALIDADE              ANALYTICS
+        Testes e controles      Perguntas de negócio
+```
 
-O repositório contém:
+O RENAEST/SENATRAN constitui a fonte principal dos acidentes.
 
-documentação;
-catálogo de dados;
-notebooks/código do pipeline;
-consultas analíticas;
-diagramas;
-evidências visuais do ambiente e dos resultados.
+O IPP/PCRJ atua como fonte complementar para o enriquecimento territorial da camada Gold.
 
-A integração do ambiente Databricks com o repositório faz parte da organização de versionamento e rastreabilidade do projeto, sem alterar a arquitetura de dados descrita neste documento.
+---
 
-## 21. Princípios adotados
+## 14. Organização dos notebooks
 
-A arquitetura foi construída segundo alguns princípios:
+A implementação funcional do pipeline está distribuída nos seguintes notebooks:
 
-Separação de responsabilidades: cada camada possui uma finalidade definida.
+| Notebook | Responsabilidade |
+|---|---|
+| `01_ingestao_api.ipynb` | Ingestão dos arquivos e persistência da camada Bronze |
+| `03_silver.ipynb` | Tratamento e construção da camada Silver |
+| `04_gold.ipynb` | Construção do modelo dimensional Gold e enriquecimento territorial |
+| `05_quality.ipynb` | Testes e controles de qualidade |
+| `06_analytics.ipynb` | Análises e respostas às perguntas de negócio |
 
-Preservação da origem: os arquivos recebidos permanecem disponíveis na Landing Zone.
+O nome `01_ingestao_api.ipynb` foi definido durante o planejamento inicial, quando uma API era considerada como possível mecanismo de aquisição.
 
-Transformação progressiva: limpeza e padronização são realizadas após a ingestão.
+Após a investigação da fonte, foram utilizados os arquivos CSV disponibilizados oficialmente. O nome do notebook foi preservado na estrutura implementada.
 
-Rastreabilidade: metadados técnicos e documentação permitem acompanhar a origem e as transformações.
+---
 
-Integridade: o modelo Gold foi validado quanto às suas chaves e granularidade.
+## 15. Separação entre processamento e análise
 
-Conservadorismo na integração: informações externas somente são associadas quando existe uma regra considerada segura.
+Uma decisão arquitetural importante do projeto é manter separadas as responsabilidades de transformação e consumo.
 
-Consumo sobre dados preparados: as análises utilizam a Gold, e não diretamente os dados brutos.
+As etapas de ingestão e preparação dos dados são executadas antes das análises:
 
-## 22. Resultado arquitetural
+```text
+01_ingestao_api
+       |
+       v
+   03_silver
+       |
+       v
+    04_gold
+       |
+       +----------------+
+       |                |
+       v                v
+  05_quality       06_analytics
+```
 
-A arquitetura final implementada é:
+O notebook de Analytics não é responsável por reconstruir o modelo dimensional.
 
-Fonte → Landing → Bronze → Silver → Gold → Qualidade/Analytics
+Da mesma forma, os arquivos CSV originais não são utilizados diretamente como fonte das respostas às perguntas de negócio.
 
-Ela mantém os dados de origem separados dos dados tratados e dos dados destinados ao consumo analítico, ao mesmo tempo em que preserva uma cadeia rastreável entre as etapas do projeto.
+Essa separação facilita a rastreabilidade entre processamento, validação e consumo.
 
+---
 
-Há duas decisões deliberadas aqui.
+## 16. Catálogo e documentação
 
-Primeiro, **não coloquei um `02_bronze` fictício na tabela de notebooks**. A documentação representa o que efetivamente executamos no Databricks: a Bronze está no `01_ingestao_api`.
+A arquitetura é complementada por documentação específica para cada componente do projeto.
 
-Segundo, na seção de GitHub usei “a integração [...] faz parte da organização de versionamento” sem afirmar que ela já está concluída. Quando terminarmos `04_modelagem.md`, vamos tratar essa pendência de forma controlada e verificar o recurso atual do Databricks antes de conectar qualquer coisa.
+Os principais documentos são:
 
-Commit:
+| Documento | Conteúdo |
+|---|---|
+| `01_contexto_negocio.md` | Contexto, objetivos, escopo e perguntas |
+| `02_fontes_dados.md` | Fontes, aquisição e limitações dos dados |
+| `03_arquitetura.md` | Arquitetura Lakehouse e fluxo entre camadas |
+| `04_modelagem.md` | Modelo dimensional Gold |
+| `05_catalogo_dados.md` | Estrutura e campos do modelo Gold |
+| `06_pipeline.md` | Implementação do pipeline |
+| `07_qualidade_dados.md` | Controles e resultados de qualidade |
+| `08_analises.md` | Resultados das análises |
+| `09_autoavaliacao.md` | Avaliação do projeto, limitações e evoluções |
 
-`docs: documenta arquitetura lakehouse e camadas medallion`
+O catálogo detalhado dos campos da camada Gold está disponível em:
 
-Depois de salvar, falta somente o **`docs/04_modelagem.md`** nessa sequência inicial. Aí fechamos `01–09` e partimos para a integração Databricks ↔ GitHub que você mencionou.
+`catalog/data_dictionary.xlsx`
+
+---
+
+## 17. Versionamento e rastreabilidade
+
+O código e a documentação do projeto são mantidos em repositório Git.
+
+Os notebooks implementados no Databricks são versionados juntamente com a documentação do MVP.
+
+Essa organização permite manter no mesmo projeto:
+
+- implementação do pipeline;
+- documentação técnica e metodológica;
+- catálogo de dados;
+- controles de qualidade;
+- análises;
+- histórico de alterações.
+
+O versionamento complementa a rastreabilidade interna do pipeline ao registrar a evolução dos artefatos utilizados na implementação.
+
+---
+
+## 18. Limitações arquiteturais e de dados
+
+A arquitetura preserva e documenta as limitações encontradas nas fontes em vez de ocultá-las por meio de transformações não verificadas.
+
+As principais limitações relevantes para o consumo analítico são:
+
+- 48,86% dos acidentes não possuem bairro informado;
+- 1,96% possuem algum valor de bairro, mas não apresentam associação exata com a referência territorial utilizada;
+- a cobertura territorial varia significativamente entre os anos;
+- 2023 e 2024 possuem somente 10 meses disponíveis no conjunto analisado.
+
+Essas limitações afetam a representatividade de determinadas análises, principalmente as análises territoriais.
+
+Elas não alteram, entretanto, os resultados dos controles de integridade estrutural do modelo Gold, que apresentou zero chaves estrangeiras nulas e zero chaves estrangeiras órfãs.
+
+---
+
+## 19. Resultado arquitetural
+
+A arquitetura final implementada pode ser sintetizada como:
+
+```text
+Fonte oficial
+     |
+     v
+Landing Zone
+     |
+     v
+Bronze
+     |
+     v
+Silver
+     |
+     v
+Gold
+  /     \
+ v       v
+Qualidade Analytics
+```
+
+Essa arquitetura mantém separados:
+
+- os dados recebidos da fonte;
+- os dados persistidos após a ingestão;
+- os dados tratados;
+- o modelo dimensional;
+- os controles de qualidade;
+- o consumo analítico.
+
+O resultado é uma cadeia de dados rastreável entre **fonte, ingestão, transformação, modelagem, validação e análise**, preservando explicitamente as limitações identificadas nos dados utilizados.
+
+**Status da arquitetura: implementada e validada no escopo do MVP.**
