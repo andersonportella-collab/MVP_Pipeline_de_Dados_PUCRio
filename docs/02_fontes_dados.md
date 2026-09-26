@@ -34,6 +34,11 @@ Página institucional do RENAEST:
 
 https://www.gov.br/transportes/pt-br/assuntos/transito/conteudo-Senatran/registro-nacional-de-sinistros-e-estatisticas-de-transito
 
+### Licenciamento e condições de uso
+
+As fontes utilizadas neste projeto são disponibilizadas por órgãos públicos em iniciativas oficiais de dados abertos. O RENAEST/SENATRAN integra a política de disponibilização de estatísticas e dados abertos do Ministério dos Transportes, enquanto os dados territoriais do IPP/PCRJ são disponibilizados no contexto da política de dados abertos da Prefeitura da Cidade do Rio de Janeiro. A utilização no MVP preserva a identificação e a proveniência das fontes oficiais.  
+A licença MIT presente no repositório refere-se **ao código-fonte e à documentação produzidos para este projeto**, não devendo ser interpretada como licença dos conjuntos de dados originais, cujas condições de disponibilização permanecem vinculadas aos respectivos órgãos públicos.
+
 ---
 
 ## 3. Arquivos utilizados
