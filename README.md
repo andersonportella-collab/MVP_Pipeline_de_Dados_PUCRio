@@ -305,6 +305,7 @@ MVP_Pipeline_de_Dados_PUCRio/
 │   └── data_dictionary.xlsx
 │
 ├── CHANGELOG.md
+├── Evidencias_Execucao_MVP_Pipeline_Dados.pdf
 ├── LICENSE
 ├── README.md
 ├── requirements.txt
